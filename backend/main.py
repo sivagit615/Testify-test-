@@ -12,6 +12,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
+# ─── Pipeline Imports ─────────────────────────────────────────────────────────
+from ingestion_service import ingest
+from requirement_engine import build_profile
+from scenario_engine import enrich_test_cases, compute_stats
+from coverage_engine import analyze as coverage_analyze
+from risk_engine import prioritize as risk_prioritize
+from validation_engine import validate_and_fix, ground_citations
+from export_service import build_export
+
 # ─── Setup ────────────────────────────────────────────────────────────────────
 load_dotenv()
 
@@ -23,25 +32,24 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
-    logger.warning("⚠  GEMINI_API_KEY is not set — API requests will fail.")
+    logger.warning("GEMINI_API_KEY is not set - API requests will fail.")
 
-# Initialise the google-genai client (new stable SDK)
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Prioritised model fallback chain — tries each in order on 404/503
+# Prioritised model fallback chain
 MODELS = [
     "models/gemini-3.8-flash",
     "models/gemini-3.7-flash",
     "models/gemini-3.5-flash",
     "models/gemini-2.5-flash",
 ]
-MODEL_ID = MODELS[0]  # used for logging / health endpoint
+MODEL_ID = MODELS[0]
 
 # ─── FastAPI App ──────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="Testify API — TestMind AI",
-    description="AI-powered UAT generation and PRD auditing via Google Gemini",
-    version="2.1.0",
+    title="Testify API - TestMind AI",
+    description="Enterprise AI-powered UAT generation and PRD auditing",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -68,23 +76,41 @@ class TestCase(BaseModel):
     preconditions: str
     steps: list[str]
     expected_result: str
-    test_type: str  # "Positive" | "Negative" | "Boundary"
+    test_type: str
+    source_citation: str = ""
+
+
+class RiskItemOut(BaseModel):
+    issue: str
+    risk_level: str
+    suggestion: str
+    impact_score: float = 0.0
+    exposure_score: float = 0.0
+    uncertainty_score: float = 0.0
+    composite_score: float = 0.0
+    priority_rank: int = 0
 
 
 class UATResponse(BaseModel):
     audit_findings: list[dict]
     overall_risk: str
+    risk_score: float = 0.0
+    risk_summary: str = ""
+    prioritized_findings: list[RiskItemOut] = []
+    conflicts: list[str] = []
+    business_rules: list[str] = []
     test_cases: list[TestCase]
+    coverage_audit: list[str] = []
+    coverage_score: float = 0.0
     summary: str
 
 
 # ─── Gemini Prompt ────────────────────────────────────────────────────────────
-SYSTEM_INSTRUCTION = """You are Testify (TestMind AI), an elite AI QA Test Architect and Requirements Auditor with 15+ years of experience.
+SYSTEM_INSTRUCTION = """You are Testify (TestMind AI), an elite AI QA Test Architect and Requirements Auditor with 15+ years of enterprise experience.
 Your role is to audit PRDs for quality issues and generate comprehensive UAT test matrices.
 
 CRITICAL: You MUST respond with ONLY a single, valid JSON object.
-Do NOT include markdown code fences (```), prose, or any text outside the JSON object.
-"""
+Do NOT include markdown code fences, prose, or any text outside the JSON object."""
 
 USER_PROMPT_TEMPLATE = """Analyse the following PRD/requirements and respond with a single JSON object matching this EXACT schema:
 
@@ -97,6 +123,8 @@ USER_PROMPT_TEMPLATE = """Analyse the following PRD/requirements and respond wit
     }}
   ],
   "overall_risk": "<exactly one of: High, Medium, Low>",
+  "conflicts": ["<contradictory statement detected across the PRD>"],
+  "business_rules": ["<explicit constraint extracted from the PRD>"],
   "test_cases": [
     {{
       "test_id": "TC_001",
@@ -107,41 +135,43 @@ USER_PROMPT_TEMPLATE = """Analyse the following PRD/requirements and respond wit
         "Step 2: <user action>"
       ],
       "expected_result": "<clear, measurable outcome>",
-      "test_type": "<exactly one of: Positive, Negative, Boundary>"
+      "test_type": "<exactly one of: Positive, Negative, Boundary, Edge, Recovery>",
+      "source_citation": "<which PRD section/rule this test validates>"
     }}
   ],
+  "coverage_audit": ["<notes requiring human QA review>"],
   "summary": "<2-3 sentence executive summary of the test coverage>"
 }}
 
 RULES:
-- audit_findings: Flag vague language, missing error-handling specs, undefined business rules, conflicting requirements, and missing edge cases. Be specific.
+- audit_findings: Flag vague language, missing error-handling specs, undefined business rules, conflicting requirements, missing edge cases. Be specific.
+- conflicts: Detect contradictions across different parts of the source document.
+- business_rules: Extract every explicit constraint, threshold, limit, or rule stated in the PRD.
 - overall_risk: Derive from the severity of audit findings.
-- test_cases: Generate AT LEAST 10 test cases. Include happy paths (Positive), failure paths (Negative), and edge/boundary conditions (Boundary). Number them TC_001, TC_002, etc.
+- test_cases: Generate AT LEAST 10 test cases. Include: Positive (happy paths), Negative (failure paths), Boundary (limits), Edge (corner cases), and Recovery (error recovery/rollback). Number them TC_001, TC_002, etc.
 - steps: MUST be a JSON array of strings, never a single string.
-- test_type: MUST be EXACTLY "Positive", "Negative", or "Boundary" — case-sensitive, no other values.
+- test_type: MUST be EXACTLY one of "Positive", "Negative", "Boundary", "Edge", "Recovery" - case-sensitive.
+- source_citation: Reference the specific PRD section, user story, or business rule this test validates.
+- coverage_audit: Note any areas that need human QA review or have insufficient test coverage.
 - Respond with ONLY the JSON. No markdown. No prose. No code fences.
 
 PRD / Requirements to analyse:
 {prd_text}"""
 
 
-# ─── JSON Extraction & Sanitisation ──────────────────────────────────────────
+# ─── JSON Extraction ─────────────────────────────────────────────────────────
 def extract_json(text: str) -> dict:
-    """Robustly extract and parse JSON from the model's raw response text."""
+    """Robustly extract and parse JSON from model response."""
     text = text.strip()
-
-    # Strip markdown code fences if the model ignores the instruction
     text = re.sub(r"^```(?:json)?\s*\n?", "", text, flags=re.IGNORECASE | re.MULTILINE)
     text = re.sub(r"\n?```\s*$", "", text, flags=re.MULTILINE)
     text = text.strip()
 
-    # Attempt 1 — direct parse
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Attempt 2 — find outermost { ... } block
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         try:
@@ -151,69 +181,8 @@ def extract_json(text: str) -> dict:
 
     raise ValueError(
         "Model response did not contain parseable JSON. "
-        f"Raw response (first 400 chars): {text[:400]}"
+        f"Raw (first 400 chars): {text[:400]}"
     )
-
-
-def sanitise_response(data: dict) -> dict:
-    """Enforce strict enum values and data-shape constraints before Pydantic."""
-    VALID_RISK = {"High", "Medium", "Low"}
-    VALID_TYPES = {"Positive", "Negative", "Boundary"}
-
-    # --- audit_findings ---
-    findings = data.get("audit_findings", [])
-    if not isinstance(findings, list):
-        data["audit_findings"] = []
-    else:
-        for f in findings:
-            if not isinstance(f, dict):
-                continue
-            if f.get("risk_level") not in VALID_RISK:
-                f["risk_level"] = "Medium"
-            f.setdefault("issue", "Unspecified issue")
-            f.setdefault("suggestion", "Review and clarify this requirement.")
-
-    # --- overall_risk ---
-    if data.get("overall_risk") not in VALID_RISK:
-        data["overall_risk"] = "Medium"
-
-    # --- test_cases ---
-    test_cases = data.get("test_cases", [])
-    if not isinstance(test_cases, list):
-        data["test_cases"] = []
-        test_cases = []
-
-    for i, tc in enumerate(test_cases):
-        if not isinstance(tc, dict):
-            continue
-
-        # Enforce TC_NNN format
-        if not re.match(r"^TC_\d+$", str(tc.get("test_id", ""))):
-            tc["test_id"] = f"TC_{i + 1:03d}"
-
-        # Enforce test_type enum
-        if tc.get("test_type") not in VALID_TYPES:
-            tc["test_type"] = "Positive"
-
-        # Ensure steps is always a list[str]
-        steps = tc.get("steps", [])
-        if isinstance(steps, str):
-            parts = re.split(r"\.\s+|\n+|;\s+", steps)
-            tc["steps"] = [p.strip() for p in parts if p.strip()]
-        elif not isinstance(steps, list):
-            tc["steps"] = [str(steps)]
-        else:
-            # Coerce each item to str, drop None values
-            tc["steps"] = [str(s) for s in steps if s is not None]
-
-        tc.setdefault("title", f"Test Case {i + 1}")
-        tc.setdefault("preconditions", "Application is running and accessible.")
-        tc.setdefault("expected_result", "The system behaves as specified.")
-
-    # --- summary ---
-    data.setdefault("summary", "UAT matrix generated successfully.")
-
-    return data
 
 
 # ─── Main Endpoint ────────────────────────────────────────────────────────────
@@ -222,28 +191,27 @@ async def generate_uat(data: UATRequest) -> Any:
     if not GEMINI_API_KEY or not client:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "GEMINI_API_KEY is not configured. "
-                "Add it to backend/.env and restart the server. "
-                "Get a free key at https://aistudio.google.com/app/apikey"
-            ),
+            detail="GEMINI_API_KEY is not configured. Add it to backend/.env and restart.",
         )
 
-    prompt = USER_PROMPT_TEMPLATE.format(prd_text=data.prd_text)
+    # ── Stage 1: Ingestion ────────────────────────────────────────────────
+    ingestion = ingest(data.prd_text)
     logger.info(
-        "-> Sending request to Gemini API (model=%s, chars=%d)", MODEL_ID, len(prompt)
+        "Ingestion: format=%s, chunks=%d, actors=%s",
+        ingestion.format_detected, len(ingestion.chunks), ingestion.actors_hint,
     )
 
-    # ── Call Gemini (retry + model fallback) ───────────────────────────────
+    prompt = USER_PROMPT_TEMPLATE.format(prd_text=data.prd_text)
+    logger.info("Sending request to Gemini API (chars=%d)", len(prompt))
+
+    # ── Stage 2: Gemini Call (retry + model fallback) ─────────────────────
     raw_text: str | None = None
     last_exc: Exception | None = None
 
     for model in MODELS:
-        for attempt in range(1, 4):  # up to 3 attempts per model
+        for attempt in range(1, 4):
             try:
-                logger.info(
-                    "-> Attempt %d/%d — model=%s", attempt, 3, model
-                )
+                logger.info("Attempt %d/3 - model=%s", attempt, model)
                 response = client.models.generate_content(
                     model=model,
                     contents=prompt,
@@ -254,70 +222,122 @@ async def generate_uat(data: UATRequest) -> Any:
                     ),
                 )
                 raw_text = response.text
-                logger.info(
-                    "<- Gemini response received (model=%s, chars=%d)",
-                    model,
-                    len(raw_text),
-                )
-                break  # success — exit retry loop
-
+                logger.info("Gemini response received (model=%s, chars=%d)", model, len(raw_text))
+                break
             except Exception as exc:
                 last_exc = exc
                 err_str = str(exc)
-                # 503 = overloaded → retry with backoff
                 if "503" in err_str or "UNAVAILABLE" in err_str:
-                    wait = 2 ** attempt  # 2s, 4s, 8s
-                    logger.warning(
-                        "Model %s overloaded (attempt %d/3). Retrying in %ds...",
-                        model, attempt, wait,
-                    )
+                    wait = 2 ** attempt
+                    logger.warning("Model %s overloaded (attempt %d/3). Retrying in %ds...", model, attempt, wait)
                     time.sleep(wait)
                     continue
-                # 404 = model retired/unavailable → skip to next model
                 elif "404" in err_str or "NOT_FOUND" in err_str:
-                    logger.warning(
-                        "Model %s not available (404). Trying next model...", model
-                    )
+                    logger.warning("Model %s not available (404). Trying next...", model)
                     break
-                # Any other error → fail fast
                 else:
                     logger.error("Gemini API error: %s", exc)
-                    raise HTTPException(
-                        status_code=502,
-                        detail=f"Gemini API error: {err_str}",
-                    )
+                    raise HTTPException(status_code=502, detail=f"Gemini API error: {err_str}")
         if raw_text is not None:
-            break  # got a response — exit model fallback loop
+            break
 
     if raw_text is None:
-        detail = (
-            f"All models unavailable. Last error: {last_exc}"
-            if last_exc
-            else "All models unavailable."
-        )
-        logger.error(detail)
+        detail = f"All models unavailable. Last error: {last_exc}" if last_exc else "All models unavailable."
         raise HTTPException(status_code=502, detail=detail)
 
-    # ── Parse & Sanitise ─────────────────────────────────────────────────────
+    # ── Stage 3: Parse JSON ───────────────────────────────────────────────
     try:
         parsed = extract_json(raw_text)
-        parsed = sanitise_response(parsed)
     except (ValueError, KeyError, TypeError) as exc:
-        logger.error("JSON parse/validation error: %s", exc)
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse structured response from Gemini: {str(exc)}",
-        )
+        logger.error("JSON parse error: %s", exc)
+        raise HTTPException(status_code=422, detail=f"Failed to parse Gemini response: {str(exc)}")
 
-    # ── Final Pydantic validation ─────────────────────────────────────────────
+    # ── Stage 4: Validation Engine ────────────────────────────────────────
+    parsed = validate_and_fix(parsed)
+
+    # ── Stage 5: Scenario Engine ──────────────────────────────────────────
+    parsed["test_cases"] = enrich_test_cases(parsed.get("test_cases", []))
+    scenario_stats = compute_stats(parsed["test_cases"])
+    logger.info("Scenarios: total=%d, by_type=%s", scenario_stats.total, scenario_stats.by_type)
+
+    # ── Stage 6: Requirement Engine ───────────────────────────────────────
+    profile = build_profile(data.prd_text, parsed, ingestion.actors_hint)
+    # Merge extracted business rules
+    existing_rules = parsed.get("business_rules", [])
+    for rule in profile.business_rules:
+        if rule not in existing_rules:
+            existing_rules.append(rule)
+    parsed["business_rules"] = existing_rules
+
+    # ── Stage 7: Citation Grounding ───────────────────────────────────────
+    parsed["test_cases"] = ground_citations(parsed["test_cases"], data.prd_text)
+
+    # ── Stage 8: Coverage Engine ──────────────────────────────────────────
+    coverage = coverage_analyze(
+        test_cases=parsed["test_cases"],
+        audit_findings=parsed.get("audit_findings", []),
+        business_rules=parsed.get("business_rules", []),
+        workflows=profile.workflows,
+        gemini_conflicts=parsed.get("conflicts"),
+    )
+    # Merge coverage results
+    existing_conflicts = parsed.get("conflicts", [])
+    for c in coverage.conflicts:
+        if c not in existing_conflicts:
+            existing_conflicts.append(c)
+    parsed["conflicts"] = existing_conflicts
+
+    existing_audit = parsed.get("coverage_audit", [])
+    for a in coverage.coverage_audit:
+        if a not in existing_audit:
+            existing_audit.append(a)
+    parsed["coverage_audit"] = existing_audit
+    parsed["coverage_score"] = coverage.coverage_score
+
+    # ── Stage 9: Risk Engine ──────────────────────────────────────────────
+    risk = risk_prioritize(parsed.get("audit_findings", []))
+    parsed["overall_risk"] = risk.overall_risk
+    parsed["risk_score"] = risk.risk_score
+    parsed["risk_summary"] = risk.risk_summary
+    parsed["prioritized_findings"] = [
+        {
+            "issue": item.issue,
+            "risk_level": item.risk_level,
+            "suggestion": item.suggestion,
+            "impact_score": item.impact_score,
+            "exposure_score": item.exposure_score,
+            "uncertainty_score": item.uncertainty_score,
+            "composite_score": item.composite_score,
+            "priority_rank": item.priority_rank,
+        }
+        for item in risk.prioritized_findings
+    ]
+
+    # ── Stage 10: Final Pydantic Validation ───────────────────────────────
     try:
         return UATResponse(**parsed)
     except Exception as exc:
         logger.error("Pydantic validation error: %s", exc)
-        raise HTTPException(
-            status_code=422,
-            detail=f"Response schema validation failed: {str(exc)}",
-        )
+        raise HTTPException(status_code=422, detail=f"Response schema validation failed: {str(exc)}")
+
+
+# ─── Export Endpoint ──────────────────────────────────────────────────────────
+class ExportRequest(BaseModel):
+    response_data: dict
+    project_key: str = "TEST"
+
+@app.post("/api/export")
+async def export_data(req: ExportRequest):
+    """Generate CSV, JSON, and Jira payloads from a previous response."""
+    try:
+        payload = build_export(req.response_data, req.project_key)
+        return {
+            "csv": payload.csv_content,
+            "json": payload.json_content,
+            "jira_tickets": payload.jira_tickets,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export error: {str(exc)}")
 
 
 # ─── Utility Endpoints ────────────────────────────────────────────────────────
@@ -329,13 +349,17 @@ async def health() -> dict:
         "model": MODEL_ID,
         "sdk": "google-genai 2.x",
         "api_key_configured": bool(GEMINI_API_KEY),
+        "pipeline": [
+            "ingestion", "gemini", "validation", "scenario",
+            "requirement", "citation", "coverage", "risk",
+        ],
     }
 
 
 @app.get("/")
 async def root() -> dict:
     return {
-        "message": "Testify API v2.1 — POST /api/generate-uat to generate a UAT matrix",
+        "message": "Testify API v3.0 - Enterprise TestMind AI Pipeline",
         "docs": "/docs",
         "health": "/health",
     }
@@ -343,5 +367,4 @@ async def root() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

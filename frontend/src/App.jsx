@@ -1,16 +1,28 @@
 import { useState } from 'react'
 import Header from './components/Header'
 import PRDInput from './components/PRDInput'
-import AuditPanel from './components/AuditPanel'
-import UATMatrix from './components/UATMatrix'
 import LoadingOverlay from './components/LoadingOverlay'
-import StatsBar from './components/StatsBar'
+import Overview from './components/Overview'
+import TestMatrix from './components/TestMatrix'
+import RiskCoverage from './components/RiskCoverage'
+import QAReview from './components/QAReview'
+import ExportView from './components/ExportView'
 
 const HERO_FEATURES = [
   { icon: '🔍', label: 'PRD Audit', desc: 'Flags vague & missing requirements' },
   { icon: '🧪', label: 'UAT Matrix', desc: 'Structured test suite in seconds' },
-  { icon: '📊', label: 'Risk Analysis', desc: 'High / Medium / Low severity' },
-  { icon: '📥', label: 'CSV Export', desc: 'One-click download for your team' },
+  { icon: '📊', label: 'Risk Analysis', desc: 'Impact-weighted prioritization' },
+  { icon: '🛡️', label: 'Coverage Audit', desc: 'Gap detection & conflict flags' },
+  { icon: '✅', label: 'QA Review', desc: 'Approve, flag, or edit test cases' },
+  { icon: '📥', label: 'Multi-Export', desc: 'CSV, JSON, & Jira tickets' },
+]
+
+const TABS = [
+  { id: 'overview', label: 'Overview', icon: '📊' },
+  { id: 'matrix', label: 'Test Matrix', icon: '🧪' },
+  { id: 'risk', label: 'Risk & Coverage', icon: '🛡️' },
+  { id: 'review', label: 'QA Review', icon: '✅' },
+  { id: 'export', label: 'Export', icon: '📥' },
 ]
 
 export default function App() {
@@ -18,6 +30,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [activeTab, setActiveTab] = useState('overview')
 
   const handleGenerate = async () => {
     if (!prd.trim()) return
@@ -39,6 +52,7 @@ export default function App() {
       }
 
       setResult(data)
+      setActiveTab('overview')
     } catch (err) {
       setError(err.message || 'An unexpected error occurred. Please try again.')
     } finally {
@@ -49,6 +63,7 @@ export default function App() {
   const handleReset = () => {
     setResult(null)
     setError(null)
+    setActiveTab('overview')
   }
 
   return (
@@ -63,7 +78,7 @@ export default function App() {
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full
                             bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-300 font-medium">
               <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-              Powered by Google Gemini 2.0 Flash
+              Enterprise AI Intelligence Pipeline
             </div>
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-balance">
               Automate Your{' '}
@@ -71,8 +86,8 @@ export default function App() {
               <br />with AI Precision
             </h1>
             <p className="text-slate-400 max-w-xl mx-auto text-base leading-relaxed">
-              Paste your PRD or user stories. Testify audits requirements for risks and generates
-              a complete, exportable UAT matrix in seconds.
+              Paste your PRD or user stories. Testify audits requirements, detects conflicts,
+              generates a comprehensive UAT matrix, and prioritizes business risks — all in seconds.
             </p>
 
             {/* Feature pills */}
@@ -91,19 +106,40 @@ export default function App() {
           </section>
         )}
 
-        {/* Reset bar when result is shown */}
+        {/* Tab navigation + Reset bar when result is shown */}
         {result && !isLoading && (
-          <div className="flex items-center justify-between animate-fade-in">
-            <div>
-              <h2 className="text-lg font-bold text-slate-100">Analysis Complete</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Review your audit findings and UAT matrix below</p>
+          <div className="space-y-4 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-100">Analysis Complete</h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {result.test_cases?.length || 0} test cases · {result.audit_findings?.length || 0} findings · Risk: {result.overall_risk}
+                </p>
+              </div>
+              <button onClick={handleReset} className="btn-secondary text-xs !py-2">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+                New Analysis
+              </button>
             </div>
-            <button onClick={handleReset} className="btn-secondary text-xs !py-2">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-              </svg>
-              New Analysis
-            </button>
+
+            {/* Tab bar */}
+            <div className="flex gap-1 p-1 rounded-xl bg-slate-900/80 border border-slate-700/50 overflow-x-auto">
+              {TABS.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all duration-200
+                    ${activeTab === tab.id
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'}`}
+                >
+                  <span>{tab.icon}</span>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -142,23 +178,43 @@ export default function App() {
         {/* Loading state */}
         {isLoading && <LoadingOverlay />}
 
-        {/* Results */}
+        {/* Results — tabbed views */}
         {result && !isLoading && (
           <div className="space-y-6">
-            {/* Stats */}
-            <StatsBar testCases={result.test_cases} />
+            {/* Overview Tab */}
+            {activeTab === 'overview' && (
+              <Overview 
+                summary={result.summary}
+                overallRisk={result.overall_risk}
+                coverageScore={result.coverage_score}
+                businessRules={result.business_rules}
+                auditFindings={result.audit_findings || result.prioritized_findings}
+              />
+            )}
 
-            {/* Audit findings */}
-            <AuditPanel
-              auditFindings={result.audit_findings}
-              overallRisk={result.overall_risk}
-            />
+            {/* Matrix Tab */}
+            {activeTab === 'matrix' && (
+              <TestMatrix testCases={result.test_cases} />
+            )}
 
-            {/* UAT Matrix table */}
-            <UATMatrix
-              testCases={result.test_cases}
-              summary={result.summary}
-            />
+            {/* Risk & Coverage Tab */}
+            {activeTab === 'risk' && (
+              <RiskCoverage 
+                conflicts={result.conflicts}
+                coverageAudit={result.coverage_audit}
+                findings={result.prioritized_findings || result.audit_findings}
+              />
+            )}
+
+            {/* QA Review Tab */}
+            {activeTab === 'review' && (
+              <QAReview testCases={result.test_cases} />
+            )}
+
+            {/* Export Tab */}
+            {activeTab === 'export' && (
+              <ExportView result={result} />
+            )}
           </div>
         )}
       </main>
@@ -170,7 +226,7 @@ export default function App() {
             © 2026 Testify — Enterprise AI UAT Platform
           </p>
           <p className="text-xs text-slate-600">
-            Built with FastAPI · React · Google Gemini 2.0 Flash
+            Built with FastAPI · React · Google Gemini · 10-Stage Intelligence Pipeline
           </p>
         </div>
       </footer>

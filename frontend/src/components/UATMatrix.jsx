@@ -7,6 +7,8 @@ function TestTypeBadge({ type }) {
   if (normalised === 'positive') return <span className="badge-positive">✓ Positive</span>
   if (normalised === 'negative') return <span className="badge-negative">✗ Negative</span>
   if (normalised === 'boundary') return <span className="badge-boundary">◈ Boundary</span>
+  if (normalised === 'edge') return <span className="badge-edge">⚡ Edge</span>
+  if (normalised === 'recovery') return <span className="badge-recovery">↻ Recovery</span>
   return <span className="text-xs text-slate-400">{type}</span>
 }
 
@@ -35,7 +37,7 @@ function StepList({ steps }) {
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 
 function exportToCSV(testCases) {
-  const headers = ['Test ID', 'Title', 'Test Type', 'Preconditions', 'Steps', 'Expected Result']
+  const headers = ['Test ID', 'Title', 'Test Type', 'Preconditions', 'Steps', 'Expected Result', 'Source Citation']
   const rows = testCases.map((tc) => [
     tc.test_id,
     tc.title,
@@ -43,6 +45,7 @@ function exportToCSV(testCases) {
     tc.preconditions,
     Array.isArray(tc.steps) ? tc.steps.join(' | ') : tc.steps,
     tc.expected_result,
+    tc.source_citation || '',
   ])
 
   const escape = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`
@@ -64,7 +67,7 @@ function exportToCSV(testCases) {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TYPE_FILTER_OPTIONS = ['All', 'Positive', 'Negative', 'Boundary']
+const TYPE_FILTER_OPTIONS = ['All', 'Positive', 'Negative', 'Boundary', 'Edge', 'Recovery']
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -82,11 +85,12 @@ export default function UATMatrix({ testCases, summary }) {
       !q ||
       tc.title?.toLowerCase().includes(q) ||
       tc.test_id?.toLowerCase().includes(q) ||
-      tc.expected_result?.toLowerCase().includes(q)
+      tc.expected_result?.toLowerCase().includes(q) ||
+      tc.source_citation?.toLowerCase().includes(q)
     return matchType && matchSearch
   })
 
-  const counts = { Positive: 0, Negative: 0, Boundary: 0 }
+  const counts = { Positive: 0, Negative: 0, Boundary: 0, Edge: 0, Recovery: 0 }
   testCases.forEach((tc) => {
     if (counts[tc.test_type] !== undefined) counts[tc.test_type]++
   })
@@ -127,28 +131,20 @@ export default function UATMatrix({ testCases, summary }) {
             onClick={() => exportToCSV(testCases)}
             className="btn-secondary text-xs !py-2 !px-4"
           >
-            <svg
-              className="w-3.5 h-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
             Export CSV
           </button>
         </div>
 
         {/* Type count badges */}
-        <div className="mt-4 flex items-center gap-3 flex-wrap">
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
           <span className="badge-positive">{counts.Positive} Positive</span>
           <span className="badge-negative">{counts.Negative} Negative</span>
           <span className="badge-boundary">{counts.Boundary} Boundary</span>
+          <span className="badge-edge">{counts.Edge} Edge</span>
+          <span className="badge-recovery">{counts.Recovery} Recovery</span>
         </div>
 
         {/* AI Summary */}
@@ -164,16 +160,9 @@ export default function UATMatrix({ testCases, summary }) {
           <div className="relative flex-1 min-w-[180px] max-w-xs">
             <svg
               className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
             </svg>
             <input
               type="text"
@@ -225,15 +214,16 @@ export default function UATMatrix({ testCases, summary }) {
               <th className="w-24">Test ID</th>
               <th>Title</th>
               <th className="w-28">Type</th>
-              <th className="w-52">Preconditions</th>
-              <th className="w-72">Steps</th>
+              <th className="w-48">Preconditions</th>
+              <th className="w-64">Steps</th>
               <th>Expected Result</th>
+              <th className="w-48">Source</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center py-12 text-slate-500 text-sm">
+                <td colSpan={7} className="text-center py-12 text-slate-500 text-sm">
                   <div className="flex flex-col items-center gap-2">
                     <svg className="w-8 h-8 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -250,10 +240,7 @@ export default function UATMatrix({ testCases, summary }) {
                   style={{ animationDelay: `${i * 35}ms`, animationFillMode: 'both' }}
                 >
                   <td>
-                    <span
-                      className="font-mono text-xs font-semibold text-cyan-400 bg-cyan-500/5
-                                 border border-cyan-500/20 px-2 py-0.5 rounded whitespace-nowrap"
-                    >
+                    <span className="font-mono text-xs font-semibold text-cyan-400 bg-cyan-500/5 border border-cyan-500/20 px-2 py-0.5 rounded whitespace-nowrap">
                       {tc.test_id}
                     </span>
                   </td>
@@ -273,6 +260,11 @@ export default function UATMatrix({ testCases, summary }) {
                   </td>
                   <td>
                     <p className="text-xs text-slate-300 leading-relaxed">{tc.expected_result}</p>
+                  </td>
+                  <td>
+                    <p className="text-xs text-indigo-400/70 italic leading-relaxed">
+                      {tc.source_citation || '—'}
+                    </p>
                   </td>
                 </tr>
               ))

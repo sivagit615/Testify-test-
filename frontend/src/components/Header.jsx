@@ -12,7 +12,7 @@ export default function Header() {
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-tight gradient-text">Testify</h1>
-            <p className="text-xs text-slate-500 font-medium leading-none">AI UAT Platform</p>
+            <p className="text-xs text-slate-500 font-medium leading-none">TestMind AI Platform</p>
           </div>
         </div>
 
@@ -20,11 +20,15 @@ export default function Header() {
         <div className="hidden md:flex items-center gap-4">
           <span className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Gemini 2.0 Flash
+            Gemini 3.8 Flash
           </span>
           <div className="h-4 w-px bg-slate-700" />
           <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
             Enterprise
+          </span>
+          <div className="h-4 w-px bg-slate-700" />
+          <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+            10-Stage Pipeline
           </span>
         </div>
       </div>

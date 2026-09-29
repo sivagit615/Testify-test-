@@ -1,7 +1,7 @@
 export default function StatsBar({ testCases }) {
   if (!testCases || testCases.length === 0) return null
 
-  const counts = { Positive: 0, Negative: 0, Boundary: 0 }
+  const counts = { Positive: 0, Negative: 0, Boundary: 0, Edge: 0, Recovery: 0 }
   testCases.forEach(tc => {
     const t = tc.test_type
     if (counts[t] !== undefined) counts[t]++
@@ -62,23 +62,49 @@ export default function StatsBar({ testCases }) {
       bg: 'bg-amber-500/10',
       border: 'border-amber-500/20',
     },
+    {
+      label: 'Edge',
+      value: counts.Edge,
+      sub: `${pct(counts.Edge)}%`,
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+        </svg>
+      ),
+      color: 'text-purple-400',
+      bg: 'bg-purple-500/10',
+      border: 'border-purple-500/20',
+    },
+    {
+      label: 'Recovery',
+      value: counts.Recovery,
+      sub: `${pct(counts.Recovery)}%`,
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+        </svg>
+      ),
+      color: 'text-teal-400',
+      bg: 'bg-teal-500/10',
+      border: 'border-teal-500/20',
+    },
   ]
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-up">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 animate-slide-up">
       {stats.map((s, i) => (
         <div
           key={s.label}
           className={`glass-card p-4 border ${s.border} animate-fade-in`}
-          style={{ animationDelay: `${i * 80}ms`, animationFillMode: 'both' }}
+          style={{ animationDelay: `${i * 60}ms`, animationFillMode: 'both' }}
         >
           <div className="flex items-start justify-between">
             <div>
               <p className="text-xs text-slate-400 font-medium">{s.label}</p>
-              <p className={`text-3xl font-bold mt-1 ${s.color}`}>{s.value}</p>
+              <p className={`text-2xl font-bold mt-1 ${s.color}`}>{s.value}</p>
               {s.sub && <p className="text-xs text-slate-500 mt-0.5">{s.sub} of total</p>}
             </div>
-            <div className={`w-9 h-9 rounded-lg ${s.bg} border ${s.border} flex items-center justify-center ${s.color}`}>
+            <div className={`w-8 h-8 rounded-lg ${s.bg} border ${s.border} flex items-center justify-center ${s.color}`}>
               {s.icon}
             </div>
           </div>
